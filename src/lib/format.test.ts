@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { age, logLevel, shortImage, splitTimestamp } from './format'
+import {
+  age,
+  formatBytes,
+  formatCpu,
+  logLevel,
+  shortImage,
+  shortRevision,
+  splitTimestamp,
+} from './format'
 
 describe('age', () => {
   const now = Date.parse('2026-10-14T12:00:00Z')
@@ -45,5 +53,32 @@ describe('logs', () => {
       text: 'hello world',
     })
     expect(splitTimestamp('plain')).toEqual({ ts: null, text: 'plain' })
+  })
+})
+
+describe('usage', () => {
+  it('formats cpu like kubectl', () => {
+    expect(formatCpu(0.0254)).toBe('25m')
+    expect(formatCpu(0.0001)).toBe('1m')
+    expect(formatCpu(0)).toBe('0m')
+    expect(formatCpu(1.25)).toBe('1.25')
+    expect(formatCpu(2)).toBe('2')
+    expect(formatCpu(null)).toBe('–')
+  })
+  it('formats bytes with binary units', () => {
+    expect(formatBytes(122056704)).toBe('116Mi')
+    expect(formatBytes(1470615552)).toBe('1.4Gi')
+    expect(formatBytes(512)).toBe('512B')
+    expect(formatBytes(536870912)).toBe('512Mi')
+  })
+})
+
+describe('shortRevision', () => {
+  it('shortens git revisions', () => {
+    expect(
+      shortRevision('main@sha1:2c4c2cda986206cca62676b7be7707b399d6a7ec'),
+    ).toBe('main@2c4c2cd')
+    expect(shortRevision('immich@0.13.1')).toBe('immich@0.13.1')
+    expect(shortRevision(null)).toBe(null)
   })
 })

@@ -1,4 +1,7 @@
+mod flux;
 mod k8s;
+mod metrics;
+mod prom;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -21,7 +24,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::flux::{FluxKind, FluxRef};
 use crate::k8s::{Cluster, Kind};
+use crate::prom::Prometheus;
 
 #[derive(Clone)]
 struct AppState {
@@ -129,6 +134,59 @@ async fn restart(
         }
     }
     tracing::info!(%kind, %namespace, %name, "rollout restart requested");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    range: Option<String>,
+}
+
+async fn history(
+    State(state): State<AppState>,
+    Path((kind, namespace, name)): Path<(String, String, String)>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Json<prom::History>> {
+    check_namespace(&state, &namespace)?;
+    let kind = parse_kind(&kind)?;
+    let Some(prometheus) = &state.cluster.prometheus else {
+        return Err(not_found("usage history"));
+    };
+    let hours = match query.range.as_deref().unwrap_or("6h") {
+        "1h" => 1,
+        "6h" => 6,
+        "24h" => 24,
+        "7d" => 24 * 7,
+        _ => {
+            return Err(AppError::Status(
+                StatusCode::BAD_REQUEST,
+                "range must be 1h, 6h, 24h or 7d".into(),
+            ));
+        }
+    };
+    let history = prometheus
+        .history(kind, &namespace, &name, Duration::from_secs(hours * 3600))
+        .await
+        .map_err(|err| {
+            tracing::warn!(%err, "prometheus history query failed");
+            AppError::Status(StatusCode::BAD_GATEWAY, err.to_string())
+        })?;
+    Ok(Json(history))
+}
+
+async fn reconcile(
+    State(state): State<AppState>,
+    Path((kind, namespace, name)): Path<(String, String, String)>,
+) -> ApiResult<StatusCode> {
+    check_namespace(&state, &namespace)?;
+    let kind = FluxKind::parse(&kind).ok_or_else(|| not_found("Flux kind"))?;
+    let target = FluxRef {
+        kind,
+        namespace: namespace.clone(),
+        name: name.clone(),
+    };
+    flux::reconcile(&state.cluster.client, &target).await?;
+    tracing::info!(?kind, %namespace, %name, "flux reconcile requested");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -245,6 +303,8 @@ fn app(state: AppState, static_dir: Option<String>) -> Router {
             "/workloads/{kind}/{namespace}/{name}/restart",
             post(restart),
         )
+        .route("/workloads/{kind}/{namespace}/{name}/history", get(history))
+        .route("/flux/{kind}/{namespace}/{name}/reconcile", post(reconcile))
         .route("/pods/{namespace}/{name}", delete(delete_pod))
         .route("/pods/{namespace}/{name}/logs", get(logs))
         .fallback(|| async { not_found("endpoint") })
@@ -328,9 +388,16 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_default();
     let read_only = env("KUBEDASH_READ_ONLY").is_some_and(|v| v == "1" || v == "true");
 
+    let prometheus = env("KUBEDASH_PROMETHEUS_URL")
+        .map(|url| Prometheus::new(&url))
+        .transpose()?;
     let client = Client::try_default().await?;
     let state = AppState {
-        cluster: Cluster { client, namespaces },
+        cluster: Cluster {
+            client,
+            namespaces,
+            prometheus,
+        },
         read_only,
     };
     let router = app(state, env("KUBEDASH_STATIC_DIR"));

@@ -1,4 +1,4 @@
-import type { Health, Workload } from './api'
+import type { FluxObject, FluxRef, Health, Workload } from './api'
 
 /** Compact relative age like kubectl: 42s, 5m, 3h, 12d. */
 export function age(iso: string | null | undefined, now = Date.now()): string {
@@ -81,10 +81,53 @@ export const KIND_LABEL: Record<Workload['kind'], string> = {
 export const workloadKey = (w: Pick<Workload, 'kind' | 'namespace' | 'name'>) =>
   `${w.kind}/${w.namespace}/${w.name}`
 
-export function hasIssue(w: Workload) {
-  return (
+export const fluxKey = (f: FluxRef) => `${f.kind}/${f.namespace}/${f.name}`
+
+export function fluxFailed(f: FluxObject | undefined | null) {
+  return f?.state === 'failed'
+}
+
+/** A workload needs attention when it is unhealthy or its Flux owner failed to apply. */
+export function hasIssue(w: Workload, flux?: Map<string, FluxObject>) {
+  if (
     w.health === 'failing' ||
     w.health === 'degraded' ||
     w.health === 'progressing'
   )
+    return true
+  return Boolean(w.flux && flux && fluxFailed(flux.get(fluxKey(w.flux))))
+}
+
+/** Cores → `25m`, `1.25`. */
+export function formatCpu(cores: number | null | undefined): string {
+  if (cores == null) return '–'
+  if (cores < 1)
+    return `${Math.max(Math.round(cores * 1000), cores > 0 ? 1 : 0)}m`
+  return cores < 10
+    ? String(Number(cores.toFixed(2)))
+    : String(Number(cores.toFixed(1)))
+}
+
+/** Bytes → `117Mi`, `1.4Gi`. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return '–'
+  const units = ['B', 'Ki', 'Mi', 'Gi', 'Ti']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  const digits = value < 10 && unit > 0 ? 1 : 0
+  return `${Number(value.toFixed(digits))}${units[unit]}`
+}
+
+/** `main@sha1:2c4c2cda98…` → `main@2c4c2cd`; chart versions pass through. */
+export function shortRevision(
+  revision: string | null | undefined,
+): string | null {
+  if (!revision) return null
+  const match = /^(?:(.*)@)?sha1:([0-9a-f]{7})[0-9a-f]*$/.exec(revision)
+  if (match) return match[1] ? `${match[1]}@${match[2]}` : match[2]
+  return revision
 }

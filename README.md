@@ -16,6 +16,13 @@ pods from your phone.
   stalled rollouts) and a "Needs attention" section
 - Search, namespace filters and pinned favourites (stored in the browser)
 - App links resolved from Gateway API `HTTPRoute`s
+- Flux status per workload: the owning Kustomization or HelmRelease with its
+  state, applied revision and errors. Failed applies count as issues. A Flux
+  sheet lists every Kustomization and HelmRelease, and **Reconcile** does the
+  same as `flux reconcile … --with-source`
+- CPU and memory per workload, pod (against requests and limits) and node, from
+  the Metrics API (metrics-server). Usage history charts (1h–7d) come from
+  Prometheus when `KUBEDASH_PROMETHEUS_URL` is set
 - Detail page with pods, containers, last termination reasons and recent events
 - Live log streaming over SSE: pod and container picker, previous-container
   logs, pause, filter, wrap, timestamps and download
@@ -28,8 +35,13 @@ pods from your phone.
 ```sh
 nix develop
 npm ci
-KUBECONFIG=~/homelab/kubeconfig cargo run --manifest-path backend/Cargo.toml   # API on :3001
-npm run dev                                                                    # UI on :3100, proxies /api
+# Optional, for usage history charts:
+kubectl port-forward -n kube-prometheus-stack svc/kube-prometheus-stack-prometheus 9090 &
+# API on :3001
+KUBECONFIG=~/homelab/kubeconfig KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 \
+  cargo run --manifest-path backend/Cargo.toml
+# UI on :3100, proxies /api
+npm run dev
 ```
 
 Checks: `npm run typecheck && npm test && npm run format:check` and
@@ -37,13 +49,14 @@ Checks: `npm run typecheck && npm test && npm run format:check` and
 
 ## Configuration
 
-| Variable              | Default          | Purpose                                       |
-| --------------------- | ---------------- | --------------------------------------------- |
-| `KUBEDASH_BIND`       | `127.0.0.1:3001` | Listen address (`0.0.0.0:8080` in the image)  |
-| `KUBEDASH_STATIC_DIR` | unset            | Built UI to serve; set in the container image |
-| `KUBEDASH_NAMESPACES` | all              | Comma-separated allow-list of namespaces      |
-| `KUBEDASH_READ_ONLY`  | `false`          | `true` disables restart and pod deletion      |
-| `RUST_LOG`            | `kubedash=info`  | Log filter                                    |
+| Variable                  | Default          | Purpose                                             |
+| ------------------------- | ---------------- | --------------------------------------------------- |
+| `KUBEDASH_BIND`           | `127.0.0.1:3001` | Listen address (`0.0.0.0:8080` in the image)        |
+| `KUBEDASH_STATIC_DIR`     | unset            | Built UI to serve; set in the container image       |
+| `KUBEDASH_NAMESPACES`     | all              | Comma-separated allow-list of namespaces            |
+| `KUBEDASH_READ_ONLY`      | `false`          | `true` disables restart, pod deletion and reconcile |
+| `KUBEDASH_PROMETHEUS_URL` | unset            | Prometheus base URL for usage history charts        |
+| `RUST_LOG`                | `kubedash=info`  | Log filter                                          |
 
 kubedash uses in-cluster service account credentials, or `KUBECONFIG` when it
 runs locally.
@@ -55,9 +68,10 @@ kubedash has no login of its own. It must only be reachable through the
 Browsers can't send that header cross-origin without a CORS preflight, which
 the server never approves, so it also guards against CSRF. RBAC
 (`apps/kubedash` in the homelab repo) grants read access to
-workloads, pods, logs, events, services, nodes and HTTPRoutes. The only write
-permissions are `patch` on Deployments, StatefulSets and DaemonSets, and
-`delete` on pods.
+workloads, pods, logs, events, services, nodes, HTTPRoutes, the Metrics API and
+Flux objects. The only write permissions are `patch` on Deployments,
+StatefulSets and DaemonSets (restart), `delete` on pods, and `patch` on Flux
+Kustomizations, HelmReleases and sources (the reconcile request annotation).
 
 ## Deployment
 

@@ -1,4 +1,5 @@
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
+import * as Dialog from '@radix-ui/react-dialog'
 import { CheckCircle2, AlertTriangle, Loader2, X } from 'lucide-react'
 import {
   createContext,
@@ -267,5 +268,93 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         ))}
       </div>
     </ToastContext.Provider>
+  )
+}
+
+/** Bottom sheet on phones, centered panel on larger screens. */
+export function Sheet({
+  open,
+  onOpenChange,
+  title,
+  description,
+  children,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  title: string
+  description?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="overlay-in fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" />
+        <Dialog.Content
+          className={cx(
+            'sheet-in fixed z-50 flex flex-col border border-line bg-bg shadow-2xl outline-none',
+            'inset-x-0 bottom-0 max-h-[88dvh] rounded-t-3xl',
+            'sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:max-h-[80dvh] sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl',
+          )}
+        >
+          <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-line sm:hidden" />
+          <div className="flex shrink-0 items-start gap-3 px-5 pt-3 pb-3">
+            <div className="min-w-0 flex-1">
+              <Dialog.Title className="text-lg font-semibold">
+                {title}
+              </Dialog.Title>
+              {description ? (
+                <Dialog.Description className="mt-0.5 text-sm text-muted">
+                  {description}
+                </Dialog.Description>
+              ) : (
+                <Dialog.Description className="sr-only">
+                  {title}
+                </Dialog.Description>
+              )}
+            </div>
+            <Dialog.Close asChild>
+              <IconButton label="Close" className="-mt-1 -mr-2">
+                <X className="size-5" />
+              </IconButton>
+            </Dialog.Close>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-safe">
+            {children}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
+/** Thin usage meter; turns amber past 80% and red past 95% of the maximum. */
+export function Meter({
+  value,
+  max,
+  label,
+}: {
+  value: number
+  max: number | null
+  label: string
+}) {
+  const fraction = max ? Math.min(1, value / max) : 0
+  const tone =
+    fraction > 0.95 ? 'bg-bad' : fraction > 0.8 ? 'bg-warn' : 'bg-accent'
+  return (
+    <div
+      role="meter"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={max ?? undefined}
+      aria-valuenow={value}
+      className="h-1.5 overflow-hidden rounded-full bg-surface-2"
+    >
+      {max ? (
+        <div
+          className={cx('h-full rounded-full transition-[width]', tone)}
+          style={{ width: `${Math.max(fraction * 100, 2)}%` }}
+        />
+      ) : null}
+    </div>
   )
 }

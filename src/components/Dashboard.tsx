@@ -1,22 +1,32 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   ExternalLink,
+  GitBranch,
   MoreVertical,
   RefreshCw,
   RotateCcw,
   ScrollText,
   Search,
-  Server,
   Star,
   X,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { api, workloadPath, type Overview, type Workload } from '../lib/api'
+import {
+  api,
+  workloadPath,
+  type FluxObject,
+  type Overview,
+  type Workload,
+} from '../lib/api'
 import {
   age,
+  fluxKey,
+  formatBytes,
+  formatCpu,
   hasIssue,
   HEALTH_ORDER,
   shortImage,
+  shortRevision,
   workloadKey,
 } from '../lib/format'
 import { navigate, useNow, useStored } from '../lib/hooks'
@@ -29,6 +39,8 @@ import {
   StatusDot,
   useToast,
 } from './ui'
+import { FluxSheet } from './Flux'
+import { NodesSheet } from './Nodes'
 
 type Filter = 'all' | 'issues' | 'pinned'
 
@@ -56,6 +68,7 @@ export function Dashboard({
     null,
   )
   const [spinning, setSpinning] = useState(false)
+  const [sheet, setSheet] = useState<'flux' | 'nodes' | null>(null)
   const now = useNow()
 
   const workloads = overview?.workloads ?? []
@@ -68,27 +81,32 @@ export function Dashboard({
     )
   }, [workloads])
 
-  const issues = workloads.filter(hasIssue)
+  const fluxObjects = overview?.flux
+  const flux = useMemo(
+    () => new Map((fluxObjects ?? []).map((f) => [fluxKey(f), f])),
+    [fluxObjects],
+  )
+  const issues = workloads.filter((w) => hasIssue(w, flux))
   const healthy = workloads.filter((w) => w.health === 'healthy').length
-  const nodesReady = overview?.nodes.filter((n) => n.ready).length ?? 0
+  const gitRevision = shortRevision(overview?.sources[0]?.revision)
 
   const visible = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     return workloads.filter((w) => {
       if (namespace && w.namespace !== namespace) return false
-      if (filter === 'issues' && !hasIssue(w)) return false
+      if (filter === 'issues' && !hasIssue(w, flux)) return false
       if (filter === 'pinned' && !pinned.includes(workloadKey(w))) return false
       const haystack =
         `${w.name} ${w.namespace} ${w.kind} ${w.images.join(' ')}`.toLowerCase()
       return terms.every((t) => haystack.includes(t))
     })
-  }, [workloads, query, namespace, filter, pinned])
+  }, [workloads, query, namespace, filter, pinned, flux])
 
   // Pinned and broken workloads float to the top; the rest is grouped by namespace.
   const sections = useMemo(() => {
     const pinnedItems = visible.filter((w) => pinned.includes(workloadKey(w)))
     const attention = visible
-      .filter((w) => hasIssue(w) && !pinned.includes(workloadKey(w)))
+      .filter((w) => hasIssue(w, flux) && !pinned.includes(workloadKey(w)))
       .sort(
         (a, b) =>
           HEALTH_ORDER.indexOf(a.health) - HEALTH_ORDER.indexOf(b.health),
@@ -112,7 +130,7 @@ export function Dashboard({
       if (items?.length) out.push({ title: ns, items })
     }
     return out
-  }, [visible, pinned, namespaces])
+  }, [visible, pinned, namespaces, flux])
 
   const onRefresh = async () => {
     setSpinning(true)
@@ -130,11 +148,16 @@ export function Dashboard({
               kubedash
             </h1>
             <p className="flex items-center gap-1.5 text-xs text-muted">
-              <Server className="size-3" />
+              <GitBranch className="size-3 shrink-0" />
               {overview ? (
-                <span>
-                  {nodesReady}/{overview.nodes.length} nodes ready ·{' '}
+                <span className="truncate">
                   {workloads.length} workloads
+                  {gitRevision ? (
+                    <>
+                      {' · '}
+                      <span className="font-mono">{gitRevision}</span>
+                    </>
+                  ) : null}
                 </span>
               ) : (
                 <span>Connecting…</span>
@@ -211,9 +234,29 @@ export function Dashboard({
           <Summary
             healthy={healthy}
             issues={issues.length}
-            nodesReady={nodesReady}
-            nodes={overview.nodes.length}
+            overview={overview}
+            onFlux={() => setSheet('flux')}
+            onNodes={() => setSheet('nodes')}
           />
+        ) : null}
+
+        {overview ? (
+          <>
+            <FluxSheet
+              open={sheet === 'flux'}
+              onOpenChange={(o) => setSheet(o ? 'flux' : null)}
+              flux={overview.flux}
+              sources={overview.sources}
+              now={now}
+              readOnly={readOnly}
+              onReconciled={refresh}
+            />
+            <NodesSheet
+              open={sheet === 'nodes'}
+              onOpenChange={(o) => setSheet(o ? 'nodes' : null)}
+              nodes={overview.nodes}
+            />
+          </>
         ) : null}
 
         {error ? (
@@ -256,6 +299,7 @@ export function Dashboard({
                 <WorkloadRow
                   key={workloadKey(w)}
                   workload={w}
+                  flux={w.flux ? flux.get(fluxKey(w.flux)) : undefined}
                   now={now}
                   readOnly={readOnly}
                   pinned={pinned.includes(workloadKey(w))}
@@ -274,26 +318,40 @@ export function Dashboard({
 function Summary({
   healthy,
   issues,
-  nodesReady,
-  nodes,
+  overview,
+  onFlux,
+  onNodes,
 }: {
   healthy: number
   issues: number
-  nodesReady: number
-  nodes: number
+  overview: Overview
+  onFlux: () => void
+  onNodes: () => void
 }) {
+  const nodesReady = overview.nodes.filter((n) => n.ready).length
+  const fluxReady = overview.flux.filter((f) => f.state === 'ready').length
+  const fluxFailed = overview.flux.some((f) => f.state === 'failed')
   return (
-    <div className="fade-up mb-5 grid grid-cols-3 gap-2">
+    <div className="fade-up mb-5 grid grid-cols-4 gap-2">
       <Stat label="Healthy" value={healthy} tone="text-ok" />
       <Stat
         label="Issues"
         value={issues}
         tone={issues ? 'text-bad' : 'text-fg'}
       />
+      {overview.flux.length ? (
+        <Stat
+          label="Flux"
+          value={`${fluxReady}/${overview.flux.length}`}
+          tone={fluxFailed ? 'text-bad' : 'text-fg'}
+          onClick={onFlux}
+        />
+      ) : null}
       <Stat
         label="Nodes"
-        value={`${nodesReady}/${nodes}`}
-        tone={nodesReady < nodes ? 'text-bad' : 'text-fg'}
+        value={`${nodesReady}/${overview.nodes.length}`}
+        tone={nodesReady < overview.nodes.length ? 'text-bad' : 'text-fg'}
+        onClick={onNodes}
       />
     </div>
   )
@@ -303,20 +361,32 @@ function Stat({
   label,
   value,
   tone,
+  onClick,
 }: {
   label: string
   value: number | string
   tone: string
+  onClick?: () => void
 }) {
-  return (
-    <Card className="px-3.5 py-3">
-      <p className="text-[11px] font-semibold tracking-wider text-faint uppercase">
+  const body = (
+    <>
+      <p className="text-[10px] font-semibold tracking-wider text-faint uppercase">
         {label}
       </p>
-      <p className={cx('mt-0.5 text-2xl font-bold tabular-nums', tone)}>
+      <p className={cx('mt-0.5 text-xl font-bold tabular-nums', tone)}>
         {value}
       </p>
-    </Card>
+    </>
+  )
+  if (!onClick) return <Card className="min-w-0 px-3 py-2.5">{body}</Card>
+  return (
+    <button
+      onClick={onClick}
+      aria-label={`${label}: ${value}. Show details`}
+      className="min-w-0 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left shadow-xs transition hover:bg-surface-2 active:scale-[0.97]"
+    >
+      {body}
+    </button>
   )
 }
 
@@ -355,6 +425,7 @@ function Count({ children }: { children: React.ReactNode }) {
 
 function WorkloadRow({
   workload: w,
+  flux,
   now,
   readOnly,
   pinned,
@@ -362,6 +433,7 @@ function WorkloadRow({
   onRestarted,
 }: {
   workload: Workload
+  flux: FluxObject | undefined
   now: number
   readOnly: boolean
   pinned: boolean
@@ -414,16 +486,31 @@ function WorkloadRow({
               {w.problem}
             </p>
           ) : null}
+          {flux?.state === 'failed' ? (
+            <p className="mt-1 line-clamp-2 text-xs font-medium text-bad">
+              Flux {flux.reason ?? 'failed'}: {flux.message}
+            </p>
+          ) : null}
         </div>
-        <span
-          className={cx(
-            'mt-0.5 shrink-0 rounded-lg px-2 py-0.5 font-mono text-xs font-semibold tabular-nums',
-            w.ready >= w.desired && w.desired > 0
-              ? 'bg-ok/10 text-ok'
-              : 'bg-surface-2 text-muted',
-          )}
-        >
-          {w.ready}/{w.desired}
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <span
+            className={cx(
+              'mt-0.5 rounded-lg px-2 py-0.5 font-mono text-xs font-semibold tabular-nums',
+              w.ready >= w.desired && w.desired > 0
+                ? 'bg-ok/10 text-ok'
+                : 'bg-surface-2 text-muted',
+            )}
+          >
+            {w.ready}/{w.desired}
+          </span>
+          {w.usage && w.desired > 0 ? (
+            <span
+              className="font-mono text-[10.5px] whitespace-nowrap text-faint tabular-nums"
+              title="CPU · memory"
+            >
+              {formatCpu(w.usage.cpu)} · {formatBytes(w.usage.memory)}
+            </span>
+          ) : null}
         </span>
       </a>
 

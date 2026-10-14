@@ -9,6 +9,10 @@ use kube::api::{ApiResource, DynamicObject, GroupVersionKind, ListParams};
 use kube::{Api, Client};
 use serde::{Deserialize, Serialize};
 
+use crate::flux::{self, FluxObject, FluxRef, FluxSource};
+use crate::metrics::{self, Resources, Usage, parse_quantity, pod_resources};
+use crate::prom::Prometheus;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -57,7 +61,14 @@ pub struct Workload {
     /// Most relevant problem reported by a pod or the controller, if any.
     pub problem: Option<String>,
     pub urls: Vec<String>,
-    pub flux: Option<String>,
+    pub flux: Option<FluxRef>,
+    /// Summed current usage of the workload's pods (Metrics API).
+    pub usage: Option<Usage>,
+    /// Requests and limits of a single pod, from the pod template.
+    pub pod_requests: Resources,
+    pub pod_limits: Resources,
+    #[serde(skip)]
+    pub pod_names: Vec<String>,
     #[serde(skip)]
     pub selector: Option<LabelSelector>,
     #[serde(skip)]
@@ -73,8 +84,10 @@ pub struct NodeSummary {
     pub ready: bool,
     pub roles: Vec<String>,
     pub version: Option<String>,
-    pub cpu: Option<String>,
-    pub memory: Option<String>,
+    /// Allocatable CPU cores and memory bytes.
+    pub cpu: Option<f64>,
+    pub memory: Option<f64>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +95,12 @@ pub struct NodeSummary {
 pub struct Overview {
     pub workloads: Vec<Workload>,
     pub nodes: Vec<NodeSummary>,
+    pub flux: Vec<FluxObject>,
+    pub sources: Vec<FluxSource>,
+    /// Whether current usage (Metrics API) is available.
+    pub metrics: bool,
+    /// Whether usage history (Prometheus) is available.
+    pub history: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,6 +131,9 @@ pub struct PodSummary {
     pub created_at: Option<String>,
     pub containers: Vec<ContainerSummary>,
     pub init_containers: Vec<ContainerSummary>,
+    pub usage: Option<Usage>,
+    pub requests: Resources,
+    pub limits: Resources,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,6 +154,8 @@ pub struct WorkloadDetail {
     pub workload: Workload,
     pub pods: Vec<PodSummary>,
     pub events: Vec<EventSummary>,
+    pub flux: Option<FluxObject>,
+    pub history: bool,
 }
 
 fn time(t: &Option<Time>) -> Option<String> {
@@ -153,14 +177,6 @@ fn restarted_at(template_meta: Option<&ObjectMeta>) -> Option<String> {
         .annotations
         .as_ref()?
         .get("kubectl.kubernetes.io/restartedAt")
-        .cloned()
-}
-
-fn flux_owner(meta: &ObjectMeta) -> Option<String> {
-    let labels = meta.labels.as_ref()?;
-    labels
-        .get("kustomize.toolkit.fluxcd.io/name")
-        .or_else(|| labels.get("helm.toolkit.fluxcd.io/name"))
         .cloned()
 }
 
@@ -191,7 +207,11 @@ fn base(
         running_since: None,
         problem: None,
         urls: Vec::new(),
-        flux: flux_owner(meta),
+        flux: FluxRef::from_labels(meta),
+        usage: None,
+        pod_requests: pod_resources(spec).0,
+        pod_limits: pod_resources(spec).1,
+        pod_names: Vec::new(),
         selector,
         template_labels: template_meta
             .and_then(|m| m.labels.clone())
@@ -381,6 +401,10 @@ fn pod_labels(pod: &Pod) -> BTreeMap<String, String> {
 }
 
 fn finalize_health(w: &mut Workload, pods: &[&Pod]) {
+    w.pod_names = pods
+        .iter()
+        .filter_map(|p| p.metadata.name.clone())
+        .collect();
     w.pod_restarts = pods.iter().map(|p| pod_restarts(p)).sum();
     w.running_since = pods
         .iter()
@@ -489,6 +513,7 @@ pub struct Cluster {
     pub client: Client,
     /// When non-empty, only these namespaces are visible.
     pub namespaces: Vec<String>,
+    pub prometheus: Option<Prometheus>,
 }
 
 impl Cluster {
@@ -542,15 +567,48 @@ impl Cluster {
         let c = &self.client;
         let lp = ListParams::default();
         let (services, nodes) = (Api::<Service>::all(c.clone()), Api::<Node>::all(c.clone()));
-        let ((mut workloads, _), services, nodes, hosts) = tokio::try_join!(
+        let ((mut workloads, _), services, nodes, hosts, flux, sources, usage) = tokio::try_join!(
             self.workloads_and_pods(),
             services.list(&lp),
             nodes.list(&lp),
             async { Ok(route_hosts(c).await) },
+            async { Ok(flux::list(c).await) },
+            async { Ok(flux::git_sources(c).await) },
+            async { Ok(metrics::snapshot(c).await) },
         )?;
         attach_urls(&mut workloads, &services.items, &hosts);
-        let nodes = nodes.items.iter().map(node_summary).collect();
-        Ok(Overview { workloads, nodes })
+        if let Some(usage) = &usage {
+            for w in &mut workloads {
+                w.usage = Some(sum_usage(&usage.pods, &w.namespace, &w.pod_names));
+            }
+        }
+        let nodes = nodes
+            .items
+            .iter()
+            .map(|n| {
+                let mut summary = node_summary(n);
+                summary.usage = usage
+                    .as_ref()
+                    .and_then(|u| u.nodes.get(&summary.name).copied());
+                summary
+            })
+            .collect();
+        let flux = flux
+            .into_iter()
+            .filter(|f| self.allows(&f.namespace))
+            .collect();
+        let sources = sources
+            .into_iter()
+            .filter(|s| self.allows(&s.namespace))
+            .collect();
+        Ok(Overview {
+            workloads,
+            nodes,
+            flux,
+            sources,
+            metrics: usage.is_some(),
+            history: self.prometheus.is_some(),
+        })
     }
 
     pub async fn detail(
@@ -566,7 +624,7 @@ impl Cluster {
             Api::<Event>::namespaced(c.clone(), namespace),
             Api::<Service>::namespaced(c.clone(), namespace),
         );
-        let (mut workload, pods, events, services) = tokio::try_join!(
+        let (mut workload, pods, events, services, usage) = tokio::try_join!(
             async {
                 Ok(match kind {
                     Kind::Deployment => Api::<Deployment>::namespaced(c.clone(), namespace)
@@ -586,6 +644,7 @@ impl Cluster {
             pods.list(&lp),
             events.list(&lp),
             services.list(&lp),
+            async { Ok(metrics::snapshot(c).await) },
         )?;
         let Some(w) = workload.as_mut() else {
             return Ok(None);
@@ -627,13 +686,45 @@ impl Cluster {
         let mut events: Vec<&Event> = events.items.iter().filter(|e| is_related(e)).collect();
         events.sort_by_key(|e| std::cmp::Reverse(event_time(e)));
         let events = events.into_iter().take(40).map(event_summary).collect();
-        let pods = owned.into_iter().map(pod_summary).collect();
+        let pod_usage = |pod: &Pod| {
+            let key = (
+                namespace.to_string(),
+                pod.metadata.name.clone().unwrap_or_default(),
+            );
+            usage.as_ref().and_then(|u| u.pods.get(&key).copied())
+        };
+        let pods = owned
+            .into_iter()
+            .map(|p| PodSummary {
+                usage: pod_usage(p),
+                ..pod_summary(p)
+            })
+            .collect();
+        if let Some(usage) = &usage {
+            w.usage = Some(sum_usage(&usage.pods, &w.namespace, &w.pod_names));
+        }
+        let flux = match w.flux.clone() {
+            Some(r) if self.allows(&r.namespace) => flux::get(c, &r).await,
+            _ => None,
+        };
         Ok(workload.map(|workload| WorkloadDetail {
             workload,
             pods,
             events,
+            flux,
+            history: self.prometheus.is_some(),
         }))
     }
+}
+
+fn sum_usage(pods: &HashMap<(String, String), Usage>, namespace: &str, names: &[String]) -> Usage {
+    let mut total = Usage::default();
+    for name in names {
+        if let Some(u) = pods.get(&(namespace.to_string(), name.clone())) {
+            total += *u;
+        }
+    }
+    total
 }
 
 fn event_time(e: &Event) -> Option<String> {
@@ -755,6 +846,9 @@ fn pod_summary(pod: &Pod) -> PodSummary {
         created_at: time(&pod.metadata.creation_timestamp),
         containers,
         init_containers,
+        usage: None,
+        requests: pod_resources(spec).0,
+        limits: pod_resources(spec).1,
     }
 }
 
@@ -771,7 +865,12 @@ fn node_summary(node: &Node) -> NodeSummary {
         .filter_map(|(k, _)| k.strip_prefix("node-role.kubernetes.io/"))
         .map(str::to_string)
         .collect();
-    let capacity = status.and_then(|s| s.capacity.as_ref());
+    let allocatable = status.and_then(|s| s.allocatable.as_ref());
+    let quantity = |key: &str| {
+        allocatable
+            .and_then(|a| a.get(key))
+            .and_then(|q| parse_quantity(&q.0))
+    };
     NodeSummary {
         name: node.metadata.name.clone().unwrap_or_default(),
         ready,
@@ -779,8 +878,9 @@ fn node_summary(node: &Node) -> NodeSummary {
         version: status
             .and_then(|s| s.node_info.as_ref())
             .map(|i| i.kubelet_version.clone()),
-        cpu: capacity.and_then(|c| c.get("cpu")).map(|q| q.0.clone()),
-        memory: capacity.and_then(|c| c.get("memory")).map(|q| q.0.clone()),
+        cpu: quantity("cpu"),
+        memory: quantity("memory"),
+        usage: None,
     }
 }
 

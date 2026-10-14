@@ -13,7 +13,7 @@
           filter = path: type: !(builtins.elem (baseNameOf path) [ "node_modules" "target" "dist" ".git" "backend" ".github" "deploy" "result" "README.md" "flake.nix" "flake.lock" ]);
         };
         nodejs = pkgs.nodejs_22;
-        npmDepsHash = "sha256-n8DTiHuoYzetSkScpDVQa7QdU5S3oKrswaIr9p7HZXM=";
+        npmDepsHash = "sha256-7zduCzGKqstPFr3YgWmbfUSMt2NLz8sLbr48gks3mdw=";
         installPhase = ''mkdir -p $out/share/kubedash; cp -r dist/. $out/share/kubedash/'';
       };
       backend = pkgs.rustPlatform.buildRustPackage {

@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   Box,
   ExternalLink,
-  GitBranch,
   MoreVertical,
   RotateCcw,
   ScrollText,
@@ -17,11 +16,22 @@ import {
   api,
   type ContainerSummary,
   type EventSummary,
+  type HistoryRange,
   type PodSummary,
+  type Workload,
   type WorkloadDetail as Detail,
 } from '../lib/api'
-import { age, KIND_LABEL, shortImage } from '../lib/format'
-import { goBack, useNow, usePoll } from '../lib/hooks'
+import {
+  age,
+  formatBytes,
+  formatCpu,
+  KIND_LABEL,
+  shortImage,
+  workloadKey,
+} from '../lib/format'
+import { goBack, useNow, usePoll, useStored } from '../lib/hooks'
+import { FluxCard } from './Flux'
+import { UsageChart } from './UsageChart'
 import { itemClass, menuClass, restartDescription } from './Dashboard'
 import { LogViewer } from './LogViewer'
 import {
@@ -31,6 +41,7 @@ import {
   cx,
   HealthBadge,
   IconButton,
+  Meter,
   Skeleton,
   StatusDot,
   useToast,
@@ -166,17 +177,6 @@ export function WorkloadDetail({
                   warn={w.podRestarts > 0}
                 />
                 <Fact label="Updated" value={`${w.updated}/${w.desired}`} />
-                {w.flux ? (
-                  <Fact
-                    label="Flux"
-                    value={
-                      <span className="inline-flex items-center gap-1">
-                        <GitBranch className="size-3.5 text-faint" />
-                        {w.flux}
-                      </span>
-                    }
-                  />
-                ) : null}
               </dl>
 
               <div className="mt-4 space-y-1.5">
@@ -241,6 +241,22 @@ export function WorkloadDetail({
                 </div>
               ) : null}
             </Card>
+
+            {data.flux ? (
+              <FluxCard
+                flux={data.flux}
+                now={now}
+                readOnly={readOnly}
+                onReconciled={() => {
+                  setFastUntil(Date.now() + 30_000)
+                  void refresh()
+                }}
+              />
+            ) : null}
+
+            {w.usage || data.history ? (
+              <UsageCard workload={w} history={data.history} />
+            ) : null}
 
             <Tabs.Root
               value={tab}
@@ -423,6 +439,24 @@ function PodCard({
             {pod.node ? <span className="truncate">{pod.node}</span> : null}
             {pod.ip ? <span className="font-mono">{pod.ip}</span> : null}
           </p>
+          {pod.usage ? (
+            <div className="mt-3 grid grid-cols-2 gap-4">
+              <PodResource
+                label="CPU"
+                used={pod.usage.cpu}
+                limit={pod.limits.cpu}
+                request={pod.requests.cpu}
+                format={formatCpu}
+              />
+              <PodResource
+                label="Memory"
+                used={pod.usage.memory}
+                limit={pod.limits.memory}
+                request={pod.requests.memory}
+                format={formatBytes}
+              />
+            </div>
+          ) : null}
         </div>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
@@ -567,5 +601,138 @@ function Events({ events, now }: { events: EventSummary[]; now: number }) {
         </div>
       ))}
     </Card>
+  )
+}
+
+const RANGES: HistoryRange[] = ['1h', '6h', '24h', '7d']
+
+function UsageCard({
+  workload: w,
+  history,
+}: {
+  workload: Workload
+  history: boolean
+}) {
+  const [range, setRange] = useStored<HistoryRange>(
+    'kubedash.usage.range',
+    '6h',
+  )
+  const { data, loading, error } = usePoll(
+    () => (history ? api.history(w, range) : Promise.resolve(null)),
+    60_000,
+    `${workloadKey(w)}/${range}/${history}`,
+  )
+  // Limits are per pod; the charts show the sum over all replicas.
+  const replicas = Math.max(w.desired, 1)
+  const memoryLimit =
+    w.podLimits.memory != null ? w.podLimits.memory * replicas : null
+  const cpuLimit = w.podLimits.cpu != null ? w.podLimits.cpu * replicas : null
+
+  return (
+    <Card className="fade-up mt-3 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-semibold">Usage</h2>
+        {history ? (
+          <div
+            role="radiogroup"
+            aria-label="Time range"
+            className="flex rounded-xl bg-surface-2 p-0.5"
+          >
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                role="radio"
+                aria-checked={range === r}
+                onClick={() => setRange(r)}
+                className={cx(
+                  'h-7 rounded-[10px] px-2.5 text-xs font-semibold transition',
+                  range === r ? 'bg-surface text-fg shadow-sm' : 'text-muted',
+                )}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {history ? (
+        <div className="mt-3 grid grid-cols-2 gap-4">
+          <UsageChart
+            title="CPU"
+            points={data?.cpu ?? []}
+            format={formatCpu}
+            limit={cpuLimit}
+            rangeLabel={range}
+            loading={loading}
+          />
+          <UsageChart
+            title="Memory"
+            points={data?.memory ?? []}
+            format={formatBytes}
+            limit={memoryLimit}
+            rangeLabel={range}
+            loading={loading}
+          />
+        </div>
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-4">
+          <PodResource
+            label="CPU"
+            used={w.usage?.cpu ?? 0}
+            limit={cpuLimit}
+            request={null}
+            format={formatCpu}
+          />
+          <PodResource
+            label="Memory"
+            used={w.usage?.memory ?? 0}
+            limit={memoryLimit}
+            request={null}
+            format={formatBytes}
+          />
+        </div>
+      )}
+      {error ? (
+        <p className="mt-2 text-xs text-bad">
+          History unavailable: {error.message}
+        </p>
+      ) : null}
+    </Card>
+  )
+}
+
+function PodResource({
+  label,
+  used,
+  limit,
+  request,
+  format,
+}: {
+  label: string
+  used: number
+  limit: number | null
+  request: number | null
+  format: (v: number) => string
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-semibold tracking-wider text-faint uppercase">
+        {label}
+      </p>
+      <p className="truncate font-mono text-xs tabular-nums">
+        {format(used)}
+        <span className="text-faint">
+          {limit != null ? ` / ${format(limit)}` : ' · no limit'}
+        </span>
+      </p>
+      <div className="mt-1.5">
+        <Meter value={used} max={limit} label={`${label} usage`} />
+      </div>
+      {limit == null && request != null ? (
+        <p className="mt-1 text-[10.5px] text-faint">
+          request {format(request)}
+        </p>
+      ) : null}
+    </div>
   )
 }

@@ -1,6 +1,55 @@
 export type Kind = 'deployment' | 'statefulset' | 'daemonset'
 export type Health = 'healthy' | 'progressing' | 'degraded' | 'failing' | 'idle'
 
+export interface Usage {
+  /** CPU cores */
+  cpu: number
+  /** working-set bytes */
+  memory: number
+}
+
+export interface Resources {
+  cpu: number | null
+  memory: number | null
+}
+
+export type FluxKind = 'Kustomization' | 'HelmRelease'
+export type FluxState =
+  'ready' | 'reconciling' | 'failed' | 'suspended' | 'unknown'
+
+export interface FluxRef {
+  kind: FluxKind
+  namespace: string
+  name: string
+}
+
+export interface FluxObject extends FluxRef {
+  state: FluxState
+  reason: string | null
+  message: string | null
+  revision: string | null
+  since: string | null
+  source: string | null
+}
+
+export interface FluxSource {
+  kind: string
+  namespace: string
+  name: string
+  ready: boolean
+  revision: string | null
+  message: string | null
+  url: string | null
+}
+
+export interface History {
+  step: number
+  cpu: [number, number][]
+  memory: [number, number][]
+}
+
+export type HistoryRange = '1h' | '6h' | '24h' | '7d'
+
 export interface Workload {
   kind: Kind
   namespace: string
@@ -16,7 +65,10 @@ export interface Workload {
   runningSince: string | null
   problem: string | null
   urls: string[]
-  flux: string | null
+  flux: FluxRef | null
+  usage: Usage | null
+  podRequests: Resources
+  podLimits: Resources
 }
 
 export interface NodeSummary {
@@ -24,13 +76,22 @@ export interface NodeSummary {
   ready: boolean
   roles: string[]
   version: string | null
-  cpu: string | null
-  memory: string | null
+  /** allocatable cores */
+  cpu: number | null
+  /** allocatable bytes */
+  memory: number | null
+  usage: Usage | null
 }
 
 export interface Overview {
   workloads: Workload[]
   nodes: NodeSummary[]
+  flux: FluxObject[]
+  sources: FluxSource[]
+  /** current usage available (Metrics API) */
+  metrics: boolean
+  /** usage history available (Prometheus) */
+  history: boolean
 }
 
 export interface ContainerSummary {
@@ -56,6 +117,9 @@ export interface PodSummary {
   createdAt: string | null
   containers: ContainerSummary[]
   initContainers: ContainerSummary[]
+  usage: Usage | null
+  requests: Resources
+  limits: Resources
 }
 
 export interface EventSummary {
@@ -71,6 +135,8 @@ export interface WorkloadDetail {
   workload: Workload
   pods: PodSummary[]
   events: EventSummary[]
+  flux: FluxObject | null
+  history: boolean
 }
 
 export interface Config {
@@ -123,6 +189,15 @@ export const api = {
     ),
   restart: (w: Pick<Workload, 'kind' | 'namespace' | 'name'>) =>
     request<void>(`/workloads${workloadPath(w)}/restart`, mutation('POST')),
+  history: (
+    w: Pick<Workload, 'kind' | 'namespace' | 'name'>,
+    range: HistoryRange,
+  ) => request<History>(`/workloads${workloadPath(w)}/history?range=${range}`),
+  reconcile: (f: FluxRef) =>
+    request<void>(
+      `/flux/${f.kind.toLowerCase()}/${enc(f.namespace)}/${enc(f.name)}/reconcile`,
+      mutation('POST'),
+    ),
   deletePod: (namespace: string, name: string) =>
     request<void>(`/pods/${enc(namespace)}/${enc(name)}`, mutation('DELETE')),
   logsUrl: (
