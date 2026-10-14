@@ -1,0 +1,96 @@
+name: Validate and publish
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    concurrency:
+      group: kubedash-build-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix develop --command npm ci
+      - run: nix develop --command npm run format:check
+      - run: nix develop --command npm run typecheck
+      - run: nix develop --command npm test
+      - run: nix develop --command cargo fmt --manifest-path backend/Cargo.toml -- --check
+      - run: nix develop --command cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
+      - run: nix develop --command cargo test --manifest-path backend/Cargo.toml
+      - run: nix build .#container
+      - name: Load image and check its contents
+        run: |
+          docker load < result
+          docker create --name kubedash-files ghcr.io/fruitiex/kubedash:main >/dev/null
+          docker export kubedash-files | tar -t > files.txt
+          docker rm kubedash-files >/dev/null
+          grep -qE 'bin/kubedash$' files.txt
+          grep -qE 'share/kubedash/index.html$' files.txt
+      - name: Publish image
+        id: publish
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag ghcr.io/fruitiex/kubedash:main ghcr.io/fruitiex/kubedash:${{ github.sha }}
+          docker push ghcr.io/fruitiex/kubedash:main
+          docker push ghcr.io/fruitiex/kubedash:${{ github.sha }}
+          reference="$(docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/fruitiex/kubedash:${{ github.sha }})"
+          digest="${reference##*@}"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HOMELAB_DISPATCH_TOKEN: ${{ secrets.HOMELAB_DISPATCH_TOKEN }}
+    steps:
+      - name: Check deployment configuration and source revision
+        id: deployment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -z "$HOMELAB_DISPATCH_TOKEN" ]]; then
+            echo '::warning::Auto deployment is disabled until HOMELAB_DISPATCH_TOKEN is added to this repository.'
+            printf 'enabled=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo 'A newer main commit exists; skipping deployment of this older build.'
+            printf 'enabled=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'enabled=true\n' >> "$GITHUB_OUTPUT"
+
+      - name: Deploy tested image to homelab
+        if: steps.deployment.outputs.enabled == 'true'
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.HOMELAB_DISPATCH_TOKEN }}
+          repository: FruitieX/homelab
+          event-type: image-update
+          client-payload: |
+            {
+              "image": "ghcr.io/fruitiex/kubedash",
+              "digest": "${{ needs.build.outputs.digest }}",
+              "revision": "${{ github.sha }}"
+            }
