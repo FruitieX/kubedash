@@ -1,10 +1,12 @@
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import * as Dialog from '@radix-ui/react-dialog'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { CheckCircle2, AlertTriangle, Loader2, X } from 'lucide-react'
 import {
   createContext,
   useCallback,
   useContext,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
@@ -123,6 +125,40 @@ export function IconButton({
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * Dropdown menu whose trigger opens on tap rather than on touch pointerdown,
+ * so a scroll gesture that starts on the trigger scrolls instead of opening it.
+ * Mouse and keyboard keep Radix's default behaviour.
+ */
+export function ActionMenu({
+  trigger,
+  children,
+}: {
+  trigger: ReactNode
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const pointerType = useRef('')
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
+      <DropdownMenu.Trigger
+        asChild
+        onPointerDown={(e) => {
+          pointerType.current = e.pointerType
+          if (e.pointerType !== 'mouse') e.preventDefault()
+        }}
+        onClick={() => {
+          if (pointerType.current && pointerType.current !== 'mouse')
+            setOpen((o) => !o)
+        }}
+      >
+        {trigger}
+      </DropdownMenu.Trigger>
+      {children}
+    </DropdownMenu.Root>
   )
 }
 

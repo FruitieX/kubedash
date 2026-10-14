@@ -35,6 +35,7 @@ import { UsageChart } from './UsageChart'
 import { itemClass, menuClass, restartDescription } from './Dashboard'
 import { LogViewer } from './LogViewer'
 import {
+  ActionMenu,
   Button,
   Card,
   ConfirmDialog,
@@ -458,15 +459,16 @@ function PodCard({
             </div>
           ) : null}
         </div>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
+        <ActionMenu
+          trigger={
             <IconButton
               label={`Actions for ${pod.name}`}
               className="-mt-2 -mr-2"
             >
               <MoreVertical className="size-5" />
             </IconButton>
-          </DropdownMenu.Trigger>
+          }
+        >
           <DropdownMenu.Portal>
             <DropdownMenu.Content
               align="end"
@@ -486,7 +488,7 @@ function PodCard({
               ) : null}
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        </ActionMenu>
       </div>
       <div className="divide-y divide-line border-t border-line bg-surface-2/40">
         {pod.initContainers

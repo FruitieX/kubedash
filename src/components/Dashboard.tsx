@@ -31,6 +31,7 @@ import {
 } from '../lib/format'
 import { navigate, useNow, useStored } from '../lib/hooks'
 import {
+  ActionMenu,
   Card,
   ConfirmDialog,
   cx,
@@ -514,15 +515,16 @@ function WorkloadRow({
         </span>
       </a>
 
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild>
+      <ActionMenu
+        trigger={
           <button
             aria-label={`Actions for ${w.name}`}
             className="flex w-11 shrink-0 items-start justify-center pt-3.5 text-faint hover:text-fg focus-visible:outline-none data-[state=open]:text-fg"
           >
             <MoreVertical className="size-5" />
           </button>
-        </DropdownMenu.Trigger>
+        }
+      >
         <DropdownMenu.Portal>
           <DropdownMenu.Content
             align="end"
@@ -561,7 +563,7 @@ function WorkloadRow({
             ) : null}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+      </ActionMenu>
 
       <ConfirmDialog
         open={confirming}
