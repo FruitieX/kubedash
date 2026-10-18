@@ -38,7 +38,7 @@ npm ci
 # Optional, for usage history charts:
 kubectl port-forward -n kube-prometheus-stack svc/kube-prometheus-stack-prometheus 9090 &
 # API on :3001
-KUBECONFIG=~/homelab/kubeconfig KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 \
+KUBECONFIG=~/projects/homelab/kubeconfig KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 \
   cargo run --manifest-path backend/Cargo.toml
 # UI on :3100, proxies /api
 npm run dev
