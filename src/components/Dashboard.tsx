@@ -449,21 +449,35 @@ function WorkloadRow({
 
   return (
     <div className="group relative flex items-stretch transition hover:bg-surface-2/60 active:bg-surface-2">
-      <a
-        href={path}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey) return
-          e.preventDefault()
-          navigate(path)
-        }}
-        className="flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4"
-      >
+      <div className="relative flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4">
+        <a
+          href={path}
+          aria-label={`View ${w.name}`}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey) return
+            e.preventDefault()
+            navigate(path)
+          }}
+          className="absolute inset-0 rounded-lg focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none"
+        />
         <StatusDot health={w.health} className="mt-1.5" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-semibold">{w.name}</span>
             {pinned ? (
               <Star className="size-3.5 shrink-0 fill-warn text-warn" />
+            ) : null}
+            {w.urls.length ? (
+              <a
+                href={w.urls[0]}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open ${w.name} in a new tab`}
+                title={`Open ${w.name} in a new tab`}
+                className="relative -my-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-surface-2 hover:text-fg focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none"
+              >
+                <ExternalLink className="size-4" />
+              </a>
             ) : null}
           </div>
           <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted">
@@ -513,13 +527,13 @@ function WorkloadRow({
             </span>
           ) : null}
         </span>
-      </a>
+      </div>
 
       <ActionMenu
         trigger={
           <button
             aria-label={`Actions for ${w.name}`}
-            className="flex w-11 shrink-0 items-start justify-center pt-3.5 text-faint hover:text-fg focus-visible:outline-none data-[state=open]:text-fg"
+            className="flex w-11 shrink-0 items-center justify-center text-faint hover:text-fg focus-visible:outline-none data-[state=open]:text-fg"
           >
             <MoreVertical className="size-5" />
           </button>
