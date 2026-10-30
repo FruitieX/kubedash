@@ -95,3 +95,7 @@ npm run smoke   # real backend against a fake Kubernetes API, UI loaded in Chrom
 ```
 
 CI runs all of these on every pull request and publishes the image from `main`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
