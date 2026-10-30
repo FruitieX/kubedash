@@ -13,7 +13,9 @@
           filter = path: type: !(builtins.elem (baseNameOf path) [ "node_modules" "target" "dist" ".git" "backend" ".github" "deploy" "result" "scripts" "README.md" "flake.nix" "flake.lock" ]);
         };
         nodejs = pkgs.nodejs_26;
-        npmDepsHash = "sha256-p77AxlVidmR/+NI43zq84X4SAwxBNdpM9hEBPaZNr14=";
+        # Read from package-lock.json, so dependency updates need no hash bump.
+        npmDeps = pkgs.importNpmLock { npmRoot = ./.; };
+        npmConfigHook = pkgs.importNpmLock.npmConfigHook;
         installPhase = ''mkdir -p $out/share/kubedash; cp -r dist/. $out/share/kubedash/'';
       };
       backend = pkgs.rustPlatform.buildRustPackage {
