@@ -18,7 +18,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
@@ -30,6 +30,10 @@ jobs:
       - run: nix develop --command cargo fmt --manifest-path backend/Cargo.toml -- --check
       - run: nix develop --command cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
       - run: nix develop --command cargo test --manifest-path backend/Cargo.toml
+      - run: nix develop --command cargo build --manifest-path backend/Cargo.toml
+      - run: nix develop --command npm run build
+      - name: Smoke test the API and UI against a fake cluster
+        run: nix develop --command npm run smoke
       - run: nix build .#container
       - name: Load image and check its contents
         run: |

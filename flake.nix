@@ -10,10 +10,10 @@
         pname = "kubedash-ui"; version = "0.1.0";
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
-          filter = path: type: !(builtins.elem (baseNameOf path) [ "node_modules" "target" "dist" ".git" "backend" ".github" "deploy" "result" "README.md" "flake.nix" "flake.lock" ]);
+          filter = path: type: !(builtins.elem (baseNameOf path) [ "node_modules" "target" "dist" ".git" "backend" ".github" "deploy" "result" "scripts" "README.md" "flake.nix" "flake.lock" ]);
         };
-        nodejs = pkgs.nodejs_22;
-        npmDepsHash = "sha256-7zduCzGKqstPFr3YgWmbfUSMt2NLz8sLbr48gks3mdw=";
+        nodejs = pkgs.nodejs_26;
+        npmDepsHash = "sha256-p77AxlVidmR/+NI43zq84X4SAwxBNdpM9hEBPaZNr14=";
         installPhase = ''mkdir -p $out/share/kubedash; cp -r dist/. $out/share/kubedash/'';
       };
       backend = pkgs.rustPlatform.buildRustPackage {
@@ -41,8 +41,8 @@
     });
     devShells = eachSystem (system: let pkgs = (forSystem system).pkgs; in {
       default = pkgs.mkShell {
-        packages = with pkgs; [ nodejs_22 cargo rustc rustfmt clippy rust-analyzer pkg-config gcc git kubectl ];
-        shellHook = ''echo "kubedash: npm run dev | cargo run --manifest-path backend/Cargo.toml"'';
+        packages = with pkgs; [ nodejs_26 cargo rustc rustfmt clippy rust-analyzer pkg-config gcc git kubectl chromium ];
+        shellHook = ''export PLAYWRIGHT_CHROMIUM_EXECUTABLE=${pkgs.chromium}/bin/chromium; echo "kubedash: npm run dev | cargo run --manifest-path backend/Cargo.toml"'';
       };
     });
   };

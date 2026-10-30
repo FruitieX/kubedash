@@ -46,6 +46,9 @@ npm run dev
 
 Checks: `npm run typecheck && npm test && npm run format:check` and
 `cargo clippy --all-targets -- -D warnings && cargo test` in `backend/`.
+`npm run smoke` (after `npm run build` and `cargo build`) runs the backend
+against a fake Kubernetes API and loads the UI in Chromium; CI runs it on every
+pull request so dependency updates cannot merge with a broken app.
 
 ## Configuration
 
