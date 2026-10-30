@@ -38,7 +38,7 @@ npm ci
 # Optional, for usage history charts:
 kubectl port-forward -n kube-prometheus-stack svc/kube-prometheus-stack-prometheus 9090 &
 # API on :3001
-KUBECONFIG=~/projects/homelab/kubeconfig KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 \
+KUBECONFIG=/path/to/kubeconfig KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 \
   cargo run --manifest-path backend/Cargo.toml
 # UI on :3100, proxies /api
 npm run dev
@@ -66,8 +66,8 @@ runs locally.
 
 ## Security
 
-kubedash has no login of its own. It must only be reachable through the
-**private** LAN/VPN gateway. Mutating requests require an `x-kubedash` header.
+kubedash has no login of its own. It must only be reachable through a
+**private** gateway that the internet cannot reach. Mutating requests require an `x-kubedash` header.
 Browsers can't send that header cross-origin without a CORS preflight, which
 the server never approves, so it also guards against CSRF. RBAC
 (`apps/kubedash` in the homelab repo) grants read access to
