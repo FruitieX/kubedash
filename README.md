@@ -1,84 +1,97 @@
+<img src="public/icon.svg" width="96" alt="">
+
 # kubedash
 
-A small, mobile-first dashboard for the homelab Kubernetes cluster. Use it to
-check workload health, follow logs, rollout-restart services and delete stuck
-pods from your phone.
+A small Kubernetes dashboard meant for checking on a homelab cluster from your
+phone. It shows what's healthy and what isn't, lets you read logs, and can
+restart a workload or delete a stuck pod. It isn't trying to replace `kubectl`
+or a full admin UI.
 
-- **Frontend:** React 19, TypeScript, Tailwind CSS v4, Radix UI primitives, Vite
-- **Backend:** Rust, axum, tokio, kube-rs
+<p>
+  <img src="docs/screenshots/overview.png" width="300" alt="Overview of a made-up cluster with one crashing deployment">
+  <img src="docs/screenshots/logs.png" width="300" alt="Detail page of the crashing deployment with its logs">
+</p>
 
-## Features
+## What it shows
 
-- Overview of every Deployment, StatefulSet and DaemonSet, with health
-  (healthy / rolling out / degraded / failing / scaled to zero), ready
-  replicas, image tag, uptime and pod restart count
-- Problem detection (CrashLoopBackOff, image pull errors, unschedulable pods,
-  stalled rollouts) and a "Needs attention" section
-- Search, namespace filters and pinned favourites (stored in the browser)
-- App links resolved from Gateway API `HTTPRoute`s
-- Flux status per workload: the owning Kustomization or HelmRelease with its
-  state, applied revision and errors. Failed applies count as issues. A Flux
-  sheet lists every Kustomization and HelmRelease, and **Reconcile** does the
-  same as `flux reconcile … --with-source`
-- CPU and memory per workload, pod (against requests and limits) and node, from
-  the Metrics API (metrics-server). Usage history charts (1h–7d) come from
-  Prometheus when `KUBEDASH_PROMETHEUS_URL` is set
-- Detail page with pods, containers, last termination reasons and recent events
-- Live log streaming over SSE: pod and container picker, previous-container
-  logs, pause, filter, wrap, timestamps and download
-- `rollout restart` (the same annotation patch `kubectl` uses) and pod deletion,
-  each behind a confirmation dialog
-- Installable as a PWA, with light and dark themes
+The overview lists every Deployment, StatefulSet and DaemonSet with its ready
+replicas, image tag, uptime, restart count and current CPU and memory use.
+Anything in CrashLoopBackOff, failing to pull its image, unschedulable or stuck
+in a rollout goes into a "Needs attention" section at the top. You can search,
+filter by namespace and pin the workloads you care about (pins live in the
+browser). If a workload is behind a Gateway API `HTTPRoute`, its hostname shows
+up as a link.
 
-## Development
+A workload's page has its pods and containers, the last termination reasons,
+recent events and live logs with a filter, previous-container logs and
+download. With Prometheus configured it also draws usage history for the last
+hour up to a week.
+
+If the cluster runs Flux, each workload shows the Kustomization or HelmRelease
+that applied it, with its revision and any errors, and **Reconcile** does the
+same as `flux reconcile … --with-source`.
+
+It installs as a PWA and has light and dark themes.
+
+## Running it locally
 
 ```sh
 nix develop
 npm ci
-# Optional, for usage history charts:
-kubectl port-forward -n kube-prometheus-stack svc/kube-prometheus-stack-prometheus 9090 &
-# API on :3001
-KUBECONFIG=/path/to/kubeconfig KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 \
-  cargo run --manifest-path backend/Cargo.toml
-# UI on :3100, proxies /api
-npm run dev
+cargo run --manifest-path backend/Cargo.toml   # API on :3001, uses your KUBECONFIG
+npm run dev                                    # UI on :3100, proxies /api
 ```
 
-Checks: `npm run typecheck && npm test && npm run format:check` and
-`cargo clippy --all-targets -- -D warnings && cargo test` in `backend/`.
-`npm run smoke` (after `npm run build` and `cargo build`) runs the backend
-against a fake Kubernetes API and loads the UI in Chromium; CI runs it on every
-pull request so dependency updates cannot merge with a broken app.
+The backend uses whatever cluster `KUBECONFIG` points at, so set
+`KUBEDASH_READ_ONLY=true` if you only want to look. For the usage charts, port
+forward Prometheus and pass its URL:
+
+```sh
+kubectl port-forward -n monitoring svc/prometheus 9090 &
+KUBEDASH_PROMETHEUS_URL=http://127.0.0.1:9090 cargo run --manifest-path backend/Cargo.toml
+```
 
 ## Configuration
 
 | Variable                  | Default          | Purpose                                             |
 | ------------------------- | ---------------- | --------------------------------------------------- |
 | `KUBEDASH_BIND`           | `127.0.0.1:3001` | Listen address (`0.0.0.0:8080` in the image)        |
-| `KUBEDASH_STATIC_DIR`     | unset            | Built UI to serve; set in the container image       |
 | `KUBEDASH_NAMESPACES`     | all              | Comma-separated allow-list of namespaces            |
 | `KUBEDASH_READ_ONLY`      | `false`          | `true` disables restart, pod deletion and reconcile |
 | `KUBEDASH_PROMETHEUS_URL` | unset            | Prometheus base URL for usage history charts        |
+| `KUBEDASH_STATIC_DIR`     | unset            | Built UI to serve; already set in the image         |
 | `RUST_LOG`                | `kubedash=info`  | Log filter                                          |
 
-kubedash uses in-cluster service account credentials, or `KUBECONFIG` when it
-runs locally.
+CPU and memory figures come from the Metrics API, so the cluster needs
+metrics-server for those.
 
-## Security
+## Deploying
 
-kubedash has no login of its own. It must only be reachable through a
-**private** gateway that the internet cannot reach. Mutating requests require an `x-kubedash` header.
-Browsers can't send that header cross-origin without a CORS preflight, which
-the server never approves, so it also guards against CSRF. RBAC
-(`apps/kubedash` in the homelab repo) grants read access to
-workloads, pods, logs, events, services, nodes, HTTPRoutes, the Metrics API and
-Flux objects. The only write permissions are `patch` on Deployments,
-StatefulSets and DaemonSets (restart), `delete` on pods, and `patch` on Flux
-Kustomizations, HelmReleases and sources (the reconcile request annotation).
+The image is `ghcr.io/fruitiex/kubedash`. In the cluster it uses its service
+account, which needs read access to workloads, pods, pod logs, events,
+services, nodes, HTTPRoutes, the Metrics API and Flux objects. The only write
+permissions it uses are `patch` on Deployments, StatefulSets and DaemonSets
+(restart), `delete` on pods, and `patch` on Flux Kustomizations, HelmReleases
+and their sources (the reconcile annotation). Leave those out and set
+`KUBEDASH_READ_ONLY=true` for a view-only install.
 
-## Deployment
+kubedash has no login of its own. Only expose it on a private network, or put
+it behind a reverse proxy that handles sign-in (for example an OIDC proxy).
+Mutating requests need an `x-kubedash` header, which browsers can't send
+cross-origin without a CORS preflight that the server never approves, so other
+sites can't trigger restarts.
 
-On every push to `main`, CI checks, builds and publishes
-`ghcr.io/fruitiex/kubedash`, then sends an `image-update` dispatch to
-`FruitieX/homelab`. That pins the new digest in `apps/kubedash`, and Flux rolls
-it out. The dispatch needs a `HOMELAB_DISPATCH_TOKEN` repository secret.
+## Development
+
+The UI is React, TypeScript, Tailwind CSS and Radix UI, built with Vite. The
+backend is Rust with axum and kube-rs.
+
+```sh
+nix develop
+npm run typecheck && npm test && npm run format:check
+(cd backend && cargo clippy --all-targets -- -D warnings && cargo test)
+npm run build && cargo build --manifest-path backend/Cargo.toml
+npm run smoke   # real backend against a fake Kubernetes API, UI loaded in Chromium
+```
+
+CI runs all of these on every pull request and publishes the image from `main`.
