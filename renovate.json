@@ -2,5 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "github>FruitieX/renovate-config"
+  ],
+  "packageRules": [
+    {
+      "description": "kube pins a k8s-openapi minor, so they must be upgraded together",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["kube", "k8s-openapi"],
+      "groupName": "kube-rs"
+    }
   ]
 }
