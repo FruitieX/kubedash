@@ -221,9 +221,9 @@ fn base(
 }
 
 fn from_deployment(d: &Deployment) -> Workload {
-    let spec = d.spec.as_ref();
+    let spec = &d.spec;
     let status = d.status.clone().unwrap_or_default();
-    let desired = spec.and_then(|s| s.replicas).unwrap_or(1);
+    let desired = spec.replicas.unwrap_or(1);
     let generation_pending = match (d.metadata.generation, status.observed_generation) {
         (Some(g), Some(o)) => o < g,
         _ => false,
@@ -233,16 +233,17 @@ fn from_deployment(d: &Deployment) -> Workload {
     let mut w = base(
         Kind::Deployment,
         &d.metadata,
-        spec.and_then(|s| s.template.metadata.as_ref()),
-        spec.and_then(|s| s.template.spec.as_ref()),
-        spec.map(|s| s.selector.clone()),
+        spec.template.metadata.as_ref(),
+        spec.template.spec.as_ref(),
+        Some(spec.selector.clone()),
         desired,
         status.ready_replicas.unwrap_or(0),
         updated,
         generation_pending || updated < desired || total > updated,
     );
     let stalled = status.conditions.iter().flatten().find(|c| {
-        c.type_ == "Progressing" && c.reason.as_deref() == Some("ProgressDeadlineExceeded")
+        c.type_.as_deref() == Some("Progressing")
+            && c.reason.as_deref() == Some("ProgressDeadlineExceeded")
     });
     if let Some(c) = stalled {
         w.problem = c.message.clone();
@@ -251,9 +252,9 @@ fn from_deployment(d: &Deployment) -> Workload {
 }
 
 fn from_statefulset(s: &StatefulSet) -> Workload {
-    let spec = s.spec.as_ref();
+    let spec = &s.spec;
     let status = s.status.clone().unwrap_or_default();
-    let desired = spec.and_then(|s| s.replicas).unwrap_or(1);
+    let desired = spec.replicas.unwrap_or(1);
     let generation_pending = match (s.metadata.generation, status.observed_generation) {
         (Some(g), Some(o)) => o < g,
         _ => false,
@@ -264,9 +265,9 @@ fn from_statefulset(s: &StatefulSet) -> Workload {
     base(
         Kind::StatefulSet,
         &s.metadata,
-        spec.and_then(|s| s.template.metadata.as_ref()),
-        spec.and_then(|s| s.template.spec.as_ref()),
-        spec.map(|s| s.selector.clone()),
+        spec.template.metadata.as_ref(),
+        spec.template.spec.as_ref(),
+        Some(spec.selector.clone()),
         desired,
         status.ready_replicas.unwrap_or(0),
         updated,
@@ -275,7 +276,7 @@ fn from_statefulset(s: &StatefulSet) -> Workload {
 }
 
 fn from_daemonset(d: &DaemonSet) -> Workload {
-    let spec = d.spec.as_ref();
+    let spec = &d.spec;
     let status = d.status.clone().unwrap_or_default();
     let desired = status.desired_number_scheduled;
     let updated = status.updated_number_scheduled.unwrap_or(0);
@@ -286,9 +287,9 @@ fn from_daemonset(d: &DaemonSet) -> Workload {
     base(
         Kind::DaemonSet,
         &d.metadata,
-        spec.and_then(|s| s.template.metadata.as_ref()),
-        spec.and_then(|s| s.template.spec.as_ref()),
-        spec.map(|s| s.selector.clone()),
+        spec.template.metadata.as_ref(),
+        spec.template.spec.as_ref(),
+        Some(spec.selector.clone()),
         desired,
         status.number_ready,
         updated,
